@@ -7,34 +7,22 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 # =============================================================================
-# LISTA LINKÓW DO POBRANIA
-# Wklejasz tu same adresy URL – skrypt sam rozpozna nazwy kategorii!
+# KONFIGURACJA KATEGORII DO POBRANIA
+# Podaj tutaj nazwę kategorii i przypisany do niej link ze sklepu.
 # =============================================================================
-URLS_TO_SCRAPE = [
-    "https://mrowkaonline.com/kategoria-produkty/farby/farby-farby/farby-ogolnego-stosowania/?filter_tax_product_cat=7714",
-    "https://mrowkaonline.com/kategoria-produkty/farby/?filter_tax_product_cat=7515",
-    # "https://mrowkaonline.com/kategoria-produkty/chemia-budowlana/zaprawy/?filter...",
-]
+CATEGORIES_TO_SCRAPE = {
+    "Farby Ogólnego Stosowania": "https://mrowkaonline.com/kategoria-produkty/farby/farby-farby/farby-ogolnego-stosowania/?filter_tax_product_cat=7714",
+    "Farby (Inne)": "https://mrowkaonline.com/kategoria-produkty/farby/?filter_tax_product_cat=7515",
+    "Chemia Budowlana (7471)": "https://mrowkaonline.com/sklep/?filter_tax_product_cat=7471",
+    "Materiały Budowlane (7566)": "https://mrowkaonline.com/sklep/?filter_tax_product_cat=7566",
+    "Narzędzia (7838)": "https://mrowkaonline.com/sklep/?filter_tax_product_cat=7838",
+    "Ogród (7441)": "https://mrowkaonline.com/sklep/?filter_tax_product_cat=7441",
+    "Oświetlenie (7551)": "https://mrowkaonline.com/sklep/?filter_tax_product_cat=7551"
+    # Dodaj kolejne według wzoru:
+    # "Twoja Nazwa Kategorii": "Adres URL",
+}
 
 OUTPUT_FILENAME = "produkty.json"
-
-
-def extract_category_name_from_url(url: str) -> str:
-    """
-    Automatycznie wyciąga czytelną nazwę kategorii z adresu URL.
-    np. '.../farby-ogolnego-stosowania/?filter...' -> 'Farby Ogolnego Stosowania'
-    """
-    path = urlsplit(url).path.strip('/')
-    parts = [p for p in path.split('/') if p and p != 'page']
-    
-    if parts:
-        # Bierzemy ostatni segment ścieżki (slug)
-        slug = parts[-1]
-        # Zamieniamy myślniki na spacje i podnosimy pierwsze litery
-        clean_name = slug.replace('-', ' ').title()
-        return clean_name
-    
-    return "Inna Kategoria"
 
 
 def build_page_url(base_url: str, page_num: int) -> str:
@@ -43,7 +31,18 @@ def build_page_url(base_url: str, page_num: int) -> str:
         return base_url
 
     split_url = urlsplit(base_url)
-    path = split_url.path.rstrip('/') + f"/page/{page_num}/"
+    
+    # Sklep mrowkaonline.com obsługuje paginację z parametrami poprzez wstawienie /page/N/
+    # Musimy to obsłużyć inaczej w zależności, czy link ma ścieżkę (np. /kategoria/...) czy to główny /sklep/
+    path = split_url.path.rstrip('/')
+    if path == "/sklep":
+        path = f"/sklep/page/{page_num}/"
+    elif path.startswith("/kategoria-produkty"):
+        path = f"{path}/page/{page_num}/"
+    else:
+        # Awaryjnie, doczepiamy po prostu /page/N/
+        path = f"{path}/page/{page_num}/"
+
     return urlunsplit((split_url.scheme, split_url.netloc, path, split_url.query, split_url.fragment))
 
 
@@ -103,7 +102,7 @@ def scrape_category_with_pagination(category_name: str, start_url: str, max_page
         page_products = extract_products_from_page(scraper, page_url)
 
         if not page_products:
-            print(f"  🏁 Brak nowych produktów na stronie {page}. Koniec podstron.")
+            print(f"  🏁 Brak produktów na stronie {page}. Koniec podstron.")
             break
 
         new_count = 0
@@ -126,6 +125,7 @@ def scrape_category_with_pagination(category_name: str, start_url: str, max_page
 
 def run_crawler():
     catalog = {}
+    # Odczytujemy stary plik, żeby nie kasować poprzednich danych, jeśli je mamy
     if os.path.exists(OUTPUT_FILENAME):
         try:
             with open(OUTPUT_FILENAME, 'r', encoding='utf-8') as f:
@@ -133,10 +133,7 @@ def run_crawler():
         except Exception:
             catalog = {}
 
-    for url in URLS_TO_SCRAPE:
-        # Automatyczne rozpoznanie nazwy kategorii na podstawie linku
-        cat_name = extract_category_name_from_url(url)
-        
+    for cat_name, url in CATEGORIES_TO_SCRAPE.items():
         products = scrape_category_with_pagination(cat_name, url)
         if products:
             catalog[cat_name] = products
