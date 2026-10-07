@@ -1,27 +1,40 @@
 import json
 import time
 import os
+import re
 import cloudscraper
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 # =============================================================================
-# KONFIGURACJA KATEGORII DO POBRANIA
-# Wklejasz link do pierwszej strony kategorii — skrypt sam przejdzie przez page/2/, page/3/ itd.
+# LISTA LINKÓW DO POBRANIA
+# Wklejasz tu same adresy URL – skrypt sam rozpozna nazwy kategorii!
 # =============================================================================
-CATEGORIES_TO_SCRAPE = [
-    {
-        "category": "Farby Ogólnego Stosowania",
-        "url": "https://mrowkaonline.com/kategoria-produkty/farby/farby-farby/farby-ogolnego-stosowania/?filter_tax_product_cat=7714"
-    }
-    # Możesz tu dopisać kolejne kategorie w nowym wierszu:
-    # {
-    #     "category": "Klej i Zaprawy",
-    #     "url": "https://mrowkaonline.com/kategoria-produkty/..."
-    # }
+URLS_TO_SCRAPE = [
+    "https://mrowkaonline.com/kategoria-produkty/farby/farby-farby/farby-ogolnego-stosowania/?filter_tax_product_cat=7714",
+    "https://mrowkaonline.com/kategoria-produkty/farby/?filter_tax_product_cat=7515",
+    # "https://mrowkaonline.com/kategoria-produkty/chemia-budowlana/zaprawy/?filter...",
 ]
 
 OUTPUT_FILENAME = "produkty.json"
+
+
+def extract_category_name_from_url(url: str) -> str:
+    """
+    Automatycznie wyciąga czytelną nazwę kategorii z adresu URL.
+    np. '.../farby-ogolnego-stosowania/?filter...' -> 'Farby Ogolnego Stosowania'
+    """
+    path = urlsplit(url).path.strip('/')
+    parts = [p for p in path.split('/') if p and p != 'page']
+    
+    if parts:
+        # Bierzemy ostatni segment ścieżki (slug)
+        slug = parts[-1]
+        # Zamieniamy myślniki na spacje i podnosimy pierwsze litery
+        clean_name = slug.replace('-', ' ').title()
+        return clean_name
+    
+    return "Inna Kategoria"
 
 
 def build_page_url(base_url: str, page_num: int) -> str:
@@ -30,7 +43,6 @@ def build_page_url(base_url: str, page_num: int) -> str:
         return base_url
 
     split_url = urlsplit(base_url)
-    # Wstawienie '/page/N/' przed parametrami ?filter...
     path = split_url.path.rstrip('/') + f"/page/{page_num}/"
     return urlunsplit((split_url.scheme, split_url.netloc, path, split_url.query, split_url.fragment))
 
@@ -50,23 +62,20 @@ def extract_products_from_page(scraper, url: str) -> list[dict]:
     products = []
     try:
         response = scraper.get(url, timeout=15)
-        # Jeśli strona zwróci 404 lub inny błąd — oznacza to koniec podstron
         if response.status_code != 200:
             return products
 
         soup = BeautifulSoup(response.text, 'html.parser')
 
-        # Wyciąganie linków do produktów
         for a_tag in soup.find_all('a', href=True):
             href = a_tag['href']
             full_url = urljoin(url, href)
 
-            # Towary w tym sklepie mają w adresie frazę '/produkt/'
+            # Skanujemy tylko linki do kart produktów
             if '/produkt/' in full_url:
                 title = a_tag.get_text(strip=True) or a_tag.get('title', '')
                 clean_title = ' '.join(title.split())
 
-                # Odrzucamy bardzo krótkie lub puste etykiety (np. przyciski "Zobacz")
                 if clean_title and len(clean_title) > 3:
                     if not any(p['url'] == full_url for p in products):
                         products.append({
@@ -93,9 +102,8 @@ def scrape_category_with_pagination(category_name: str, start_url: str, max_page
 
         page_products = extract_products_from_page(scraper, page_url)
 
-        # Brak produktów = osiągnęliśmy koniec podstron
         if not page_products:
-            print(f"  🏁 Brak produktów na stronie {page}. Koniec podstron dla tej kategorii.")
+            print(f"  🏁 Brak nowych produktów na stronie {page}. Koniec podstron.")
             break
 
         new_count = 0
@@ -106,13 +114,12 @@ def scrape_category_with_pagination(category_name: str, start_url: str, max_page
 
         print(f"     ✅ Pobrano {len(page_products)} produktów na tej stronie ({new_count} nowych).")
 
-        # Jeśli na nowej stronie nie ma żadnych nowych produktów, kończymy pętlę
         if new_count == 0 and page > 1:
-            print("  🏁 Brak nowych produktów. Koniec podstron.")
+            print("  🏁 Brak nowych unikalnych produktów. Koniec podstron.")
             break
 
         page += 1
-        time.sleep(1.5)  # Pauza 1.5 sekundy, żeby nie przeciążyć serwera sklepu
+        time.sleep(1.5)
 
     return category_products
 
@@ -126,11 +133,11 @@ def run_crawler():
         except Exception:
             catalog = {}
 
-    for item in CATEGORIES_TO_SCRAPE:
-        cat_name = item["category"]
-        start_url = item["url"]
-
-        products = scrape_category_with_pagination(cat_name, start_url)
+    for url in URLS_TO_SCRAPE:
+        # Automatyczne rozpoznanie nazwy kategorii na podstawie linku
+        cat_name = extract_category_name_from_url(url)
+        
+        products = scrape_category_with_pagination(cat_name, url)
         if products:
             catalog[cat_name] = products
 
