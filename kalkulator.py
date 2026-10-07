@@ -1,17 +1,28 @@
 import json
 import re
+import os
 import cloudscraper
 from bs4 import BeautifulSoup
 import streamlit as st
 
 # =============================================================================
+# WCZYTYWANIE PRODUKTÓW Z PLIKU JSON
+# =============================================================================
+@st.cache_data(ttl=60)
+def load_products_from_json(filename="produkty.json") -> dict:
+    """Wczytuje strukturę kategorii i produktów z pliku JSON."""
+    if os.path.exists(filename):
+        try:
+            with open(filename, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            st.error(f"Błąd podczas odczytu pliku {filename}: {e}")
+    return {}
+
+# =============================================================================
 # UNIWERSALNY EKSTRAKTOR DANYCH (JSON-LD, META PIXEL, DATALAYER)
 # =============================================================================
 def extract_product_data(html_content: str) -> dict | None:
-    """
-    Ekstraktuje cenę i nazwę produktu ze źródła strony HTML.
-    Kaskadowo sprawdza: JSON-LD (Schema.org), Meta Pixel oraz dataLayer (GTM).
-    """
     soup = BeautifulSoup(html_content, 'html.parser')
     
     # 1. STRATEGIA A: JSON-LD (Schema.org)
@@ -83,9 +94,7 @@ def extract_product_data(html_content: str) -> dict | None:
 
 
 def fetch_product_info(url: str) -> tuple[dict | None, str | None]:
-    """Pobiera stronę omijając zabezpieczenia Cloudflare / 403 Forbidden za pomocą cloudscraper."""
     try:
-        # Tworzymy scraper imitujący prawdziwą przeglądarkę Google Chrome
         scraper = cloudscraper.create_scraper(
             browser={
                 'browser': 'chrome',
@@ -101,7 +110,7 @@ def fetch_product_info(url: str) -> tuple[dict | None, str | None]:
         data = extract_product_data(response.text)
         if data:
             return data, None
-        return None, "Nie odnaleziono struktury ceny w JSON-LD, Meta Pixel ani GTM na podanej stronie."
+        return None, "Nie odnaleziono struktury ceny na podanej stronie."
     except Exception as e:
         return None, f"Błąd połączenia: {e}"
 
@@ -112,23 +121,38 @@ def fetch_product_info(url: str) -> tuple[dict | None, str | None]:
 st.set_page_config(page_title="Kalkulator Budowlany", page_icon="🏗️", layout="wide")
 
 st.title("🏗️ Kalkulator Kosztów Budowlanych")
-st.write("Wybierz pozycję z listy lub wklej własny link do produktu. Aplikacja automatycznie odczyta cenę ze źródła strony.")
+st.write("Wybierz pozycję z bazy lub wklej własny link do produktu. Aplikacja automatycznie odczyta cenę ze źródła strony.")
 
-DEFAULT_PRODUCTS = {
-    "Wklej własny adres URL...": "",
-    "Zaprawa murarska 25 kg PSB (Mrówka Online)": "https://mrowkaonline.com/produkt/zaprawa-murarska-25-kg-psb/"
+# Wczytanie produktów z pliku JSON
+raw_catalog = load_products_from_json()
+
+# Budowanie pełnego katalogu z opcją własnego linku
+PRODUCTS_CATALOG = {
+    "📌 Własny link": {
+        "Wklej własny adres URL...": ""
+    }
 }
+PRODUCTS_CATALOG.update(raw_catalog)
 
 col_left, col_right = st.columns([2, 1])
 
 with col_left:
     st.subheader("1. Wybór materiału")
-    selected_option = st.selectbox("Wybierz pozycję:", list(DEFAULT_PRODUCTS.keys()))
-
-    if selected_option == "Wklej własny adres URL...":
+    
+    # 1. Wybór kategorii
+    categories = list(PRODUCTS_CATALOG.keys())
+    selected_category = st.selectbox("Wybierz kategorię:", categories)
+    
+    # 2. Wybór produktu wewnątrz wybranej kategorii
+    available_products = PRODUCTS_CATALOG.get(selected_category, {})
+    product_names = list(available_products.keys())
+    selected_product = st.selectbox("Wybierz produkt:", product_names) if product_names else None
+    
+    # 3. Pobranie adresu URL
+    if selected_category == "📌 Własny link" or selected_product == "Wklej własny adres URL...":
         product_url = st.text_input("Adres URL strony produktu:", placeholder="https://sklep.pl/produkt-123")
     else:
-        product_url = DEFAULT_PRODUCTS[selected_option]
+        product_url = available_products.get(selected_product, "")
         st.text_input("Adres URL strony produktu:", value=product_url, disabled=True)
 
 with col_right:
@@ -142,7 +166,7 @@ if st.button("🚀 Oblicz koszty", type="primary"):
     if not product_url or not product_url.startswith("http"):
         st.warning("Wprowadź prawidłowy adres URL rozpoczynający się od http:// lub https://")
     else:
-        with st.spinner("Pobieranie danych ze strony hurtowni (omijanie zabezpieczeń)..."):
+        with st.spinner("Pobieranie danych ze strony hurtowni..."):
             data, error = fetch_product_info(product_url)
         
         if error:
